@@ -51,6 +51,17 @@ fcode-version3
 
 : le-w! le-w!-xt execute ;
 
+\ Legacy ports in this card's own bus's I/O space (see pci-io-base)
+" pci-io-base" (find-xt) execute value io-base
+
+: vga-port-c! ( val port -- )
+  io-base if io-base + c! else ioc! then
+;
+
+: vga-port-w! ( val port -- )
+  io-base if io-base + le-w! else iow! then
+;
+
 \
 \ PCI
 \
@@ -74,7 +85,7 @@ h# 3c9 constant dac-data-addr
 defer vga-ioc!
 
 : vga-legacy-ioc!  ( val addr )
-  ioc! 
+  vga-port-c! 
 ;
 
 : vga-mmio-ioc!  ( val addr )
@@ -115,8 +126,8 @@ h# 1 constant VBE_DISPI_ENABLED
 defer vbe-iow!
 
 : vbe-legacy-iow!  ( val addr -- )
-  h# 1ce iow!
-  h# 1d0 iow!
+  h# 1ce vga-port-w!
+  h# 1d0 vga-port-w!
 ;
 
 : vbe-mmio-iow!  ( val addr -- )

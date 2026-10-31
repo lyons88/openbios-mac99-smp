@@ -1,5 +1,10 @@
 [IFDEF] CONFIG_DRIVER_PCI
 
+\ Host address of the I/O space of the bus whose card is being probed,
+\ 0 if unknown: a card on a second PCI domain (the G4's AGP bus) has its
+\ legacy VGA ports in that domain's I/O space, not the main bus's
+0 value pci-io-base
+
 : pci-addr-encode ( addr.lo addr.mi addr.hi )
   rot >r swap >r 
   encode-int 

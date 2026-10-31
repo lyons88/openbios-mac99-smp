@@ -200,6 +200,28 @@ static const pci_arch_t known_arch[] = {
     },
 };
 
+/* The G4 UniNorth's AGP bus, a PCI domain of its own */
+static const pci_arch_t mac99_agp_arch = {
+        .name = "MAC99_AGP",
+        .vendor_id = PCI_VENDOR_ID_APPLE,
+        .device_id = PCI_DEVICE_ID_APPLE_UNI_N_AGP,
+        .cfg_addr = 0xf0800000,
+        .cfg_data = 0xf0c00000,
+        .cfg_base = 0xf0000000,
+        .cfg_len = 0x02000000,
+        .host_pci_base = 0x0,
+        .pci_mem_base = 0x90000000,
+        .mem_len = 0x10000000,
+        .io_base = 0xf0000000,
+        .io_len = 0x00800000,
+        .host_ranges = {
+            { .type = IO_SPACE, .parentaddr = 0, .childaddr = 0xf0000000, .len = 0x00800000 },
+            { .type = MEMORY_SPACE_32, .parentaddr = 0x90000000, .childaddr = 0x90000000, .len = 0x10000000 },
+            { .type = 0, .parentaddr = 0, .childaddr = 0, .len = 0 }
+         },
+        .irqs = { 0x1b, 0x1c, 0x1d, 0x1e }
+};
+
 /* The U3's HyperTransport domain */
 static const pci_arch_t u3_ht_arch = {
         .name = "MAC99_U3_HT",
@@ -1087,7 +1109,7 @@ arch_of_init(void)
     uint64_t ram_size;
     const struct cpudef *cpu;
     char buf[256], qemu_uuid[16];
-    const char *stdin_path, *stdout_path, *boot_path;
+    const char *stdin_path, *stdout_path, *boot_path, *model;
     uint32_t temp = 0;
     char *boot_device, *bootorder_file;
     uint32_t bootorder_sz, sz;
@@ -1130,6 +1152,10 @@ arch_of_init(void)
             ob_pci_ht_init(&u3_ht_arch);
         }
         ob_pci_init();
+        /* an AGP card on the G4 gets the UniNorth AGP bus */
+        if (machine_id == ARCH_MAC99) {
+            ob_pci_agp_init(&mac99_agp_arch);
+        }
         ob_unin_init();
         break;
     default:
@@ -1243,15 +1269,23 @@ arch_of_init(void)
     case ARCH_MAC99:
     case ARCH_PREP:
     default:
+        /*
+         * Mac OS X 10.4 drives a PowerMac3,1 with Core99CPU, whose soft
+         * resets stop at four CPUs; a PowerMac3,6 gets MacRISC2CPU, which
+         * takes each CPU's soft-reset from the device tree (Cat_7).
+         */
+        model = machine_id == ARCH_MAC99 &&
+                fw_cfg_read_i32(FW_CFG_NB_CPUS) > 4 ? "PowerMac3,6"
+                                                    : "PowerMac3,1";
 
         /* model */
 
-        push_str("PowerMac3,1");
+        push_str(model);
         fword("model");
 
         /* compatible */
 
-        push_str("PowerMac3,1");
+        push_str(model);
         fword("encode-string");
         push_str("MacRISC");
         fword("encode-string");
@@ -1339,16 +1373,17 @@ arch_of_init(void)
                 }
                 if (gpio_ph) {
                     /* KeyLargo extint-gpio3/4/15/16; K2 gpio7-10 */
+                    /* CPU0-3: the chips' own lines; CPU4-31: QEMU-only
+                       soft-reset lines at 0x85 + n (0x89-0xa4) */
                     static const uint32_t soft_reset_gpio[4] = {
                         0x5b, 0x5c, 0x67, 0x68
                     };
-                    static const uint32_t k2_soft_reset_gpio[8] = {
-                        0x71, 0x72, 0x73, 0x74, 0x89, 0x8a, 0x8b, 0x8c
+                    static const uint32_t k2_soft_reset_gpio[4] = {
+                        0x71, 0x72, 0x73, 0x74
                     };
-                    /* QEMU's K2 has eight soft-reset lines, KeyLargo four */
-                    uint32_t reset_offset = is_u3() ?
-                                            k2_soft_reset_gpio[i < 8 ? i : 1] :
-                                            soft_reset_gpio[i < 4 ? i : 1];
+                    uint32_t reset_offset = i >= 4 ? 0x85 + i :
+                                            is_u3() ? k2_soft_reset_gpio[i] :
+                                            soft_reset_gpio[i];
 
                     PUSH(gpio_ph);
                     fword("encode-int");

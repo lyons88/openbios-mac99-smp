@@ -18,6 +18,7 @@
 int ob_pci_init(void);
 struct pci_arch_t;
 int ob_pci_ht_init(const struct pci_arch_t *ht);
+int ob_pci_agp_init(const struct pci_arch_t *agp);
 #endif
 
 #if defined(CONFIG_DRIVER_PCI) || defined(CONFIG_DRIVER_ESCC)

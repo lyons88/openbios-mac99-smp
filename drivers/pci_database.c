@@ -294,6 +294,46 @@ static const pci_dev_t vga_devices[] = {
         NULL, NULL,
     },
     {
+        /* Radeon HD 5770 (Juniper, Evergreen). Named pci1002,68b8, as Apple's firmware names
+         * a card whose FCode does not; no model or compatible that Mac OS X
+         * drivers for other ATI cards could match. (A NULL name would
+         * leave the class's "VGA controller".) */
+        PCI_VENDOR_ID_ATI, 0x68b8,
+        NULL, "pci1002,68b8", NULL, NULL,
+        0, 0, 0,
+        NULL, NULL,
+    },
+    {
+        /* Radeon HD 6770 (Juniper, Evergreen). Named pci1002,68ba, as Apple's firmware names
+         * a card whose FCode does not; no model or compatible that Mac OS X
+         * drivers for other ATI cards could match. (A NULL name would
+         * leave the class's "VGA controller".) */
+        PCI_VENDOR_ID_ATI, 0x68ba,
+        NULL, "pci1002,68ba", NULL, NULL,
+        0, 0, 0,
+        NULL, NULL,
+    },
+    {
+        /* Radeon HD 5750 (Juniper, Evergreen). Named pci1002,68be, as Apple's firmware names
+         * a card whose FCode does not; no model or compatible that Mac OS X
+         * drivers for other ATI cards could match. (A NULL name would
+         * leave the class's "VGA controller".) */
+        PCI_VENDOR_ID_ATI, 0x68be,
+        NULL, "pci1002,68be", NULL, NULL,
+        0, 0, 0,
+        NULL, NULL,
+    },
+    {
+        /* Radeon HD 6750 (Juniper, Evergreen). Named pci1002,68bf, as Apple's firmware names
+         * a card whose FCode does not; no model or compatible that Mac OS X
+         * drivers for other ATI cards could match. (A NULL name would
+         * leave the class's "VGA controller".) */
+        PCI_VENDOR_ID_ATI, 0x68bf,
+        NULL, "pci1002,68bf", NULL, NULL,
+        0, 0, 0,
+        NULL, NULL,
+    },
+    {
         PCI_VENDOR_ID_QEMU, PCI_DEVICE_ID_QEMU_VGA,
         NULL, "QEMU,VGA", "QEMU VGA",    "VGA\0",
         0, 0, 0,

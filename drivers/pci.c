@@ -409,6 +409,43 @@ static void ob_pci_unmap(ucell virt, ucell size) {
 #endif
 }
 
+/*
+ * A second PCI domain (the G4's UniNorth AGP bus) has its own config
+ * window and I/O base. Methods that touch config space or decode a bus
+ * address look up which host bridge the calling instance sits under and
+ * use that domain's arch for the call.
+ */
+static const pci_arch_t *ob_pci_agp_arch;
+
+static const pci_arch_t *ob_pci_select_arch(void)
+{
+	const pci_arch_t *saved = arch;
+	phandle_t ph, parent, root;
+	u32 *reg;
+	int len;
+
+	if (!ob_pci_agp_arch || !my_self()) {
+		return saved;
+	}
+	root = find_dev("/");
+	ph = ih_to_phandle(my_self());
+	while (ph) {
+		PUSH(ph);
+		fword("parent");
+		parent = POP();
+		if (!parent || parent == root) {
+			break;
+		}
+		ph = parent;
+	}
+	reg = (u32 *)get_property(ph, "reg", &len);
+	if (reg && len >= host_address_cells() * 4 &&
+	    reg[host_address_cells() - 1] == ob_pci_agp_arch->cfg_base) {
+		arch = ob_pci_agp_arch;
+	}
+	return saved;
+}
+
 /* ( pci-addr.lo pci-addr.mid pci-addr.hi size -- virt )
  *
  * IEEE 1275 PCI bus binding map-in. phys.hi is the config-space cell
@@ -433,6 +470,7 @@ ob_pci_bus_map_in(int *idx)
 	ucell size;
 	ucell virt;
 	int space;
+	const pci_arch_t *saved = ob_pci_select_arch();
 
 	PCI_DPRINTF("ob_pci_bar_map_in idx=%p\n", idx);
 
@@ -471,6 +509,7 @@ ob_pci_bus_map_in(int *idx)
 		    hi, mid, lo, ba, (unsigned long)size);
 
 	virt = ob_pci_map(ba, size);
+	arch = saved;
 
 	PUSH(virt);
 }
@@ -528,19 +567,23 @@ ob_pci_bus_map_out(int *idx)
 static void
 ob_pci_config_read8(int *idx)
 {
+	const pci_arch_t *saved = ob_pci_select_arch();
 	cell hi = POP();
 	pci_addr addr = PCI_ADDR(PCI_BUS(hi), PCI_DEV(hi), PCI_FN(hi));
 	uint8_t val = pci_config_read8(addr, hi & 0xff);
+	arch = saved;
 	PUSH(val);
 }
 
 static void
 ob_pci_config_write8(int *idx)
 {
+	const pci_arch_t *saved = ob_pci_select_arch();
 	cell hi = POP();
 	pci_addr addr = PCI_ADDR(PCI_BUS(hi), PCI_DEV(hi), PCI_FN(hi));
 	cell val = POP();
 	pci_config_write8(addr, hi & 0xff, val & 0xff);
+	arch = saved;
 }
 
 NODE_METHODS(ob_pci_bus_node) = {
@@ -1008,6 +1051,20 @@ static void pci_set_assigned_addresses(phandle_t phandle,
 		props[ncells++] = 0x00000000;
 		props[ncells++] = config->sizes[i];
 	}
+	/*
+	 * The expansion ROM too, at register 0x30, as Apple's Open Firmware
+	 * lists it: Mac OS X sets the BARs up from this property, and clears
+	 * the ROM BAR of a card whose ROM is missing here, so a driver that
+	 * reads the card's ROM (its VBIOS) finds no address. The ROM is
+	 * configured in slot num_bars (6 for a device).
+	 */
+	if (num_bars == 6 && config->sizes[6]) {
+		ncells += pci_encode_phys_addr(props + ncells, 0, MEMORY_SPACE_32,
+				     config->dev, PCI_ROM_ADDRESS,
+				     config->assigned[6] & ~0x7ff);
+		props[ncells++] = 0x00000000;
+		props[ncells++] = config->sizes[6];
+	}
 	if (ncells)
 		set_property(dev, "assigned-addresses", (char *)props,
 			     ncells * sizeof(props[0]));
@@ -1193,30 +1250,34 @@ int macio_keylargo_config_cb (const pci_config_t *config)
 static const unsigned char *find_fcode_rom(unsigned long rom, uint32_t rom_size)
 {
         const unsigned char *p = (const unsigned char *)rom;
-        uint32_t pcir_off, ds_len;
+        uint32_t off = 0, pcir_off, ds_len, len;
 
-        if (rom_size < 0x1A || p[0] != 0x55 || p[1] != 0xAA) {
-                return NULL;
+        /*
+         * Walk the whole image chain: a card can carry its x86 image first
+         * and the Open Firmware one after it (PCI Firmware Specification,
+         * the indicator byte's bit 7 marks the last image).
+         */
+        while (off + 0x1A <= rom_size && p[off] == 0x55 && p[off + 1] == 0xAA) {
+                pcir_off = off + (p[off + 0x18] | (p[off + 0x19] << 8));
+                if (pcir_off + 0x18 > rom_size ||
+                    p[pcir_off] != 'P' || p[pcir_off + 1] != 'C' ||
+                    p[pcir_off + 2] != 'I' || p[pcir_off + 3] != 'R') {
+                        return NULL;
+                }
+                if (p[pcir_off + 0x14] == 0x01) {
+                        ds_len = p[pcir_off + 0x0A] | (p[pcir_off + 0x0B] << 8);
+                        if (pcir_off + ds_len > rom_size) {
+                                return NULL;
+                        }
+                        return p + pcir_off + ds_len;
+                }
+                len = (p[pcir_off + 0x10] | (p[pcir_off + 0x11] << 8)) * 512;
+                if ((p[pcir_off + 0x15] & 0x80) || len == 0) {
+                        return NULL;            /* the last image */
+                }
+                off += len;
         }
-
-        pcir_off = p[0x18] | (p[0x19] << 8);
-        if (pcir_off + 0x18 > rom_size ||
-            p[pcir_off] != 'P' || p[pcir_off + 1] != 'C' ||
-            p[pcir_off + 2] != 'I' || p[pcir_off + 3] != 'R') {
-                return NULL;
-        }
-
-        if (p[pcir_off + 0x14] != 0x01) {
-                /* Not an Open Firmware image -- x86 VBIOS, EFI, etc. */
-                return NULL;
-        }
-
-        ds_len = p[pcir_off + 0x0A] | (p[pcir_off + 0x0B] << 8);
-        if (pcir_off + ds_len > rom_size) {
-                return NULL;
-        }
-
-        return p + pcir_off + ds_len;
+        return NULL;
 }
 
 #endif
@@ -1324,7 +1385,12 @@ int vga_config_cb (const pci_config_t *config)
                      * real FCode ROM runs it inline above instead, so
                      * this fallback is skipped for it here.
                      */
+                    /* legacy VGA ports live in this card's bus's I/O space */
+                    PUSH(arch->io_base);
+                    feval("to pci-io-base");
                     feval("['] vga-driver-fcode 2 cells + 1 byte-load");
+                    PUSH(0);
+                    feval("to pci-io-base");
             }
 
 #ifdef CONFIG_MOL
@@ -2691,6 +2757,54 @@ int ob_pci_init(void)
     /* configure the host bridge interrupt map */
     intc = ob_pci_host_set_interrupt_map(phandle_host);
     ob_pci_bus_set_interrupt_map(phandle_host, intc, ob_pci_host_bus_interrupt);
+
+    return 0;
+}
+
+/*
+ * A second PCI domain with its own host bridge: the G4's UniNorth AGP
+ * bus. It gets a node only when something other than the host bridge
+ * sits on it, so the device tree is unchanged without an AGP card.
+ */
+int ob_pci_agp_init(const pci_arch_t *agp)
+{
+    const pci_arch_t *saved = arch;
+    unsigned long mem_base, io_base;
+    phandle_t host = 0, mpic;
+    uint8_t class, subclass;
+    int bus = 0, devnum, card = 0, hostdev = -1;
+    char path[1] = "";
+
+    arch = agp;
+    for (devnum = 0; devnum < 32; devnum++) {
+        if (!ob_pci_read_identification(bus, devnum, 0, 0, 0,
+                                        &class, &subclass)) {
+            continue;
+        }
+        if (class == PCI_BASE_CLASS_BRIDGE &&
+            subclass == PCI_SUBCLASS_BRIDGE_HOST) {
+            hostdev = devnum;
+        } else {
+            card = 1;
+        }
+    }
+
+    if (card && hostdev >= 0) {
+        mem_base = arch->pci_mem_base;
+        io_base = 0x400;
+        host = ob_configure_pci_device(path, &bus, &mem_base, &io_base,
+                                       bus, hostdev, 0, 0);
+        ob_pci_set_available(host, mem_base, io_base);
+
+        mpic = ob_host_mpic();
+        if (host && mpic) {
+            set_int_property(host, "interrupt-parent", mpic);
+            ob_pci_bus_set_interrupt_map(host, mpic,
+                                         ob_pci_host_bus_interrupt);
+        }
+        ob_pci_agp_arch = agp;
+    }
+    arch = saved;
 
     return 0;
 }
